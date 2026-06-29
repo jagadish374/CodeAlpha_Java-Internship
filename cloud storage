@@ -1,0 +1,121 @@
+name: Build all images
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pre_build:
+    name: build base_image ${{ matrix.arch.name }}
+    strategy:
+      fail-fast: true
+      matrix:
+        arch:
+          - name: amd64
+            runner: ubuntu-24.04
+          - name: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.arch.runner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Purge containers
+        run: 'docker kill $(docker ps -q) || exit 0'
+      - name: Enable docker multiarch
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: Run make build_base
+        run: make build_base
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
+      - name: Export
+        run: make export_base
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
+      - name: Log in to the Container registry
+        if: ${{ github.event.pull_request.merged || github.actor == 'CamJN' }}
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
+        id: login
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push to github container registry
+        if: ${{ success() && steps.login.conclusion != 'skipped' }}
+        run: make push_base
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
+
+
+  build:
+    needs: pre_build
+    name: build ${{ matrix.img }} ${{ matrix.arch.name }}
+    strategy:
+      fail-fast: true
+      matrix:
+        img:
+         - full
+         - customizable
+         - nodejs
+         - jruby100
+         - jruby94
+         - ruby40 # EOL: 2029-03-31
+         - ruby34 # EOL: 2028-03-31
+         - ruby33 # EOL: 2027-03-31
+         # https://www.ruby-lang.org/en/downloads/branches/
+         - python314 # EOL: 2030-10-31
+         - python313 # EOL: 2029-10-07
+         - python312 # EOL: 2028-10-02
+         - python311 # EOL: 2027-10-24
+         - python310 # EOL: 2026-10-04
+         # https://devguide.python.org/versions/
+        arch:
+          - name: amd64
+            runner: ubuntu-24.04
+          - name: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.arch.runner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Purge containers
+        run: 'docker kill $(docker ps -q) || exit 0'
+      - name: Enable docker multiarch
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: "Run make build_${{ matrix.img }}"
+        run: "make build_${{ matrix.img }}"
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
+      - name: Log in to the Container registry
+        if: ${{ github.event.pull_request.merged || github.actor == 'CamJN' }}
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
+        id: login
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag as latest
+        if: ${{ success() && steps.login.conclusion != 'skipped' }}
+        run: "make tag_latest_${{ matrix.img }}"
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
+      - name: Push to github container registry
+        if: ${{ success() && steps.login.conclusion != 'skipped' }}
+        run: "make push_${{ matrix.img }}"
+        env:
+          BUILD_AMD64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'amd64'] }}
+          BUILD_ARM64: ${{ fromJSON('[0, 1]')[matrix.arch.name == 'arm64'] }}
